@@ -36,6 +36,7 @@ from torch_nl import compute_neighborlist, compute_neighborlist_n2
 import torch
 
 from ase.units import kJ, mol, nm
+import tempfile
 
 
 @torch.jit.script
@@ -77,9 +78,9 @@ def _simple_nl(positions: torch.Tensor, cell: torch.Tensor, pbc: torch.Tensor, c
         deltas[:,2] = full_deltas[:,2] - shifts_z*cell[2,2]
 
     else:
-        shifts_x = torch.zeros(full_deltas.shape[0])
-        shifts_y = torch.zeros(full_deltas.shape[0])
-        shifts_z = torch.zeros(full_deltas.shape[0])
+        shifts_x = torch.zeros(full_deltas.shape[0], device=device)
+        shifts_y = torch.zeros(full_deltas.shape[0], device=device)
+        shifts_z = torch.zeros(full_deltas.shape[0], device=device)
 
     
     distances = torch.linalg.norm(deltas, dim=1)
@@ -124,7 +125,6 @@ class MACEPotentialImpl(MLPotentialImpl):
                   system: openmm.System,
                   atoms: Optional[Iterable[int]],
                   forceGroup: int,
-                  filename: str = 'macemodel.pt',
                   #implementation : str = None,
                   device: str = None,
                   dtype: str = "float64",
@@ -163,6 +163,7 @@ class MACEPotentialImpl(MLPotentialImpl):
 
                 print("Running MACEForce on device: ", self.device, " with dtype: ", self.default_dtype)
                 
+               
                 # conversion constants 
                 self.nm_to_distance = 10.0 # nm->A
                 self.distance_to_nm = 0.1 # A->nm
@@ -263,12 +264,13 @@ class MACEPotentialImpl(MLPotentialImpl):
 
         atomic_numbers = [atom.element.atomic_number for atom in includedAtoms]
 
-        torch_dtype = {"float32":torch.float32, "float64":torch.float64}[dtype]
+        # torch_dtype = {"float32":torch.float32, "float64":torch.float64}[dtype]
 
-        maceforce = MACEForce(self.model_path, atomic_numbers, atoms, is_periodic, device, dtype=torch_dtype)
+        maceforce = MACEForce(self.model_path, atomic_numbers, atoms, is_periodic, device, dtype=dtype)
         
         # Convert it to TorchScript and save it.
         module = torch.jit.script(maceforce)
+        _, filename = tempfile.mkstemp(suffix='.pt')
         module.save(filename)
 
         # Create the TorchForce and add it to the System.
