@@ -32,7 +32,10 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 from openmmml.mlpotential import MLPotential, MLPotentialImpl, MLPotentialImplFactory
 import openmm
 from typing import Iterable, Optional, Union, Tuple
+from torch_nl import compute_neighborlist, compute_neighborlist_n2
 import torch
+
+from ase.units import kJ, mol, nm
 
 
 @torch.jit.script
@@ -93,12 +96,6 @@ def _simple_nl(positions: torch.Tensor, cell: torch.Tensor, pbc: torch.Tensor, c
 
     return neighbors, shifts
     
-
-
-
-
-
-
 class MACEPotentialImplFactory(MLPotentialImplFactory):
     """This is the factory that creates MACEPotentialImpl objects."""
 
@@ -166,11 +163,10 @@ class MACEPotentialImpl(MLPotentialImpl):
 
                 print("Running MACEForce on device: ", self.device, " with dtype: ", self.default_dtype)
                 
-
                 # conversion constants 
                 self.nm_to_distance = 10.0 # nm->A
                 self.distance_to_nm = 0.1 # A->nm
-                self.energy_to_kJ = 96.49 # eV->kJ
+                self.energy_to_kJ = mol / kJ # eV->kJ
 
                 self.model = torch.load(model_path,map_location=device)
                 self.model.to(self.default_dtype)
