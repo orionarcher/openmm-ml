@@ -31,83 +31,29 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 from openmmml.mlpotential import MLPotential, MLPotentialImpl, MLPotentialImplFactory
 import openmm
-from typing import Iterable, Optional, Union, Tuple
+from typing import Iterable, Optional, Union, Tuple, List
 from torch_nl import compute_neighborlist, compute_neighborlist_n2
 import torch
 
 from ase.units import kJ, mol, nm
 import tempfile
+import os
+from openmmml.models.utils import simple_nl
 
 
-@torch.jit.script
-def _simple_nl(positions: torch.Tensor, cell: torch.Tensor, pbc: torch.Tensor, cutoff: float, self_interaction: bool=False) -> Tuple[torch.Tensor, torch.Tensor]:
-    """simple torchscriptable neighborlist. 
-    
-    It aims are to be correct, clear, and torchscript compatible, no effort has been put into making it fast.
-    It outputs nieghbors and shifts in the same format as ASE:
 
-    neighbors, shifts = simple_nl(..)
-
-    is equivalent to
-    
-    [i, j], S = primitive_neighbor_list( quantities="ijS", ...)
-    """
-
-    num_atoms = positions.shape[0]
-    device=positions.device
-
-    i = torch.repeat_interleave(torch.range(0,num_atoms-1,dtype=torch.long, device=device), num_atoms)
-    j = torch.range(0,num_atoms-1,dtype=torch.long, device=device).repeat(num_atoms)
-    neighbors=torch.vstack((i,j))
-
-    if not self_interaction:
-        mask = i==j 
-        neighbors = neighbors[:,~mask]
-
-    full_deltas = positions[neighbors[0]] - positions[neighbors[1]]
-    deltas=full_deltas.clone()
-
-    if pbc[0]:
-
-        shifts_x = torch.round(full_deltas[:,0]/cell[0,0])
-        shifts_y = torch.round(full_deltas[:,1]/cell[1,1])
-        shifts_z = torch.round(full_deltas[:,2]/cell[2,2])
-
-        deltas[:,0] = full_deltas[:,0] - shifts_x*cell[0,0]
-        deltas[:,1] = full_deltas[:,1] - shifts_y*cell[1,1]
-        deltas[:,2] = full_deltas[:,2] - shifts_z*cell[2,2]
-
-    else:
-        shifts_x = torch.zeros(full_deltas.shape[0], device=device)
-        shifts_y = torch.zeros(full_deltas.shape[0], device=device)
-        shifts_z = torch.zeros(full_deltas.shape[0], device=device)
-
-    
-    distances = torch.linalg.norm(deltas, dim=1)
-
-    # filter
-    mask = distances > cutoff
-    neighbors = neighbors[:,~mask]
-    deltas = deltas[~mask,:]
-    shifts_x = shifts_x[~mask]
-    shifts_y = shifts_y[~mask]
-    shifts_z = shifts_z[~mask]
-
-    shifts = torch.vstack((shifts_x, shifts_y, shifts_z,)).T
-
-    return neighbors, shifts
-    
 class MACEPotentialImplFactory(MLPotentialImplFactory):
     """This is the factory that creates MACEPotentialImpl objects."""
 
     def createImpl(self, name: str, model_path: str, **args) -> MLPotentialImpl:
         return MACEPotentialImpl(name, model_path)
 
+
 class MACEPotentialImpl(MLPotentialImpl):
     """This is the MLPotentialImpl implementing the MACE potential.
 
     The potential is implemented using MACE to build a PyTorch model.  A
-    TorchForce is used to add it to the OpenMM System.  
+    TorchForce is used to add it to the OpenMM System.
 
     TorchForce requires the model to be saved to disk in a separate file.  By default
     it writes a file called 'macemodel.pt' in the current working directory.  You can
@@ -120,164 +66,210 @@ class MACEPotentialImpl(MLPotentialImpl):
         self.name = name
         self.model_path = model_path
 
-    def addForces(self,
-                  topology: openmm.app.Topology,
-                  system: openmm.System,
-                  atoms: Optional[Iterable[int]],
-                  forceGroup: int,
-                  #implementation : str = None,
-                  device: str = None,
-                  dtype: str = "float64",
-                  **args):
-        
+    def addForces(
+        self,
+        topology: openmm.app.Topology,
+        system: openmm.System,
+        atoms: Optional[Iterable[int]],
+        forceGroup: int,
+        # implementation : str = None,
+        device: str = None,
+        dtype: str = "float64",
+        extra_particle_indices: Optional[torch.Tensor] = None,
+        **args
+    ):
 
         import torch
         import openmmtorch
-        #from torch_nl import compute_neighborlist
+
+        # from torch_nl import compute_neighborlist
         from e3nn.util import jit
         from mace.tools import utils, to_one_hot, atomic_numbers_to_indices
-        
-
 
         # Create the PyTorch model that will be invoked by OpenMM.
 
+        # if extra particles specified, add these to the included atoms
+
         includedAtoms = list(topology.atoms())
+        # if we are treating only a subset of particles with MACE
         if atoms is not None:
             # check if atoms needs to be ordered
             includedAtoms = [includedAtoms[i] for i in atoms]
-        
+            if extra_particle_indices is not None:
+                includedAtoms.extend([list(topology.atoms())[i] for i in extra_particle_indices])
 
         class MACEForce(torch.nn.Module):
-
-            def __init__(self, model_path, atomic_numbers, indices, periodic, device, dtype=torch.float64):
+            def __init__(
+                self,
+                model_path,
+                atomic_numbers,
+                indices,
+                periodic,
+                device,
+                dtype=torch.float64,
+                particle_filter_indices=None,
+            ):
                 super(MACEForce, self).__init__()
+                if device is None:
+                    self.device = (
+                        torch.device("cuda")
+                        if torch.cuda.is_available()
+                        else torch.device("cpu")
+                    )
 
-                if device is None: # use cuda if available
-                    self.device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-
-                else: # unless user has specified the device 
-                    self.device=torch.device(device)
+                else:  # unless user has specified the device
+                    self.device = torch.device(device)
 
                 self.default_dtype = dtype
                 torch.set_default_dtype(self.default_dtype)
 
-                print("Running MACEForce on device: ", self.device, " with dtype: ", self.default_dtype)
-                
-               
-                # conversion constants 
-                self.nm_to_distance = 10.0 # nm->A
-                self.distance_to_nm = 0.1 # A->nm
-                self.energy_to_kJ = mol / kJ # eV->kJ
+                print(
+                    "Running MACEForce on device: ",
+                    self.device,
+                    " with dtype: ",
+                    self.default_dtype,
+                )
+                self.periodic = periodic
+                # conversion constants
+                self.nm_to_distance = 10.0  # nm->A
+                self.distance_to_nm = 0.1  # A->nm
+                self.energy_to_kJ = mol / kJ  # eV->kJ
 
-                self.model = torch.load(model_path,map_location=device)
+                self.particle_filter_indices = particle_filter_indices
+
+                self.model = torch.load(model_path, map_location=device)
                 self.model.to(self.default_dtype)
                 self.model.eval()
 
-                #print(self.model)
-                #for name, param in self.model.state_dict().items():
+                # print(self.model)
+                # for name, param in self.model.state_dict().items():
                 #    print(name, param.size())
-                
+
                 self.r_max = self.model.r_max
-                self.z_table = utils.AtomicNumberTable([int(z) for z in self.model.atomic_numbers])
+                self.z_table = utils.AtomicNumberTable(
+                    [int(z) for z in self.model.atomic_numbers]
+                )
 
                 self.model = jit.compile(self.model)
-                
+
                 # setup input
-                N=len(atomic_numbers)
-                self.ptr = torch.tensor([0,N],dtype=torch.long, device=self.device)
+                N = len(atomic_numbers)
+                self.ptr = torch.tensor([0, N], dtype=torch.long, device=self.device)
                 self.batch = torch.zeros(N, dtype=torch.long, device=self.device)
-                
+
                 # one hot encoding of atomic number
-                self.node_attrs =to_one_hot(
-                        torch.tensor(atomic_numbers_to_indices(atomic_numbers, z_table=self.z_table), dtype=torch.long, device=self.device).unsqueeze(-1),
-                        num_classes=len(self.z_table),
-                    )
+                self.node_attrs = to_one_hot(
+                    torch.tensor(
+                        atomic_numbers_to_indices(atomic_numbers, z_table=self.z_table),
+                        dtype=torch.long,
+                        device=self.device,
+                    ).unsqueeze(-1),
+                    num_classes=len(self.z_table),
+                )
 
                 if periodic:
-                    self.pbc=torch.tensor([True, True, True], device=self.device)
+                    self.pbc = torch.tensor([True, True, True], device=self.device)
                 else:
-                    self.pbc=torch.tensor([False, False, False], device=self.device)
+                    self.pbc = torch.tensor([False, False, False], device=self.device)
 
-
-                #self.compute_nl = compute_neighborlist
+                # self.compute_nl = compute_neighborlist
 
                 if indices is None:
                     self.indices = None
                 else:
                     self.indices = torch.tensor(indices, dtype=torch.int64)
 
-            
-
             def forward(self, positions, boxvectors: Optional[torch.Tensor] = None):
                 # setup positions
 
-                positions = positions.to(device=self.device,dtype=self.default_dtype)
+                positions = positions.to(device=self.device, dtype=self.default_dtype)
                 if self.indices is not None:
                     positions = positions[self.indices]
 
-                positions = positions*self.nm_to_distance
+                positions = positions * self.nm_to_distance
 
                 if boxvectors is not None:
-                    cell = boxvectors.to(device=self.device,dtype=self.default_dtype) * self.nm_to_distance
+                    cell = (
+                        boxvectors.to(device=self.device, dtype=self.default_dtype)
+                        * self.nm_to_distance
+                    )
                 else:
                     cell = torch.eye(3, device=self.device)
 
                 # compute edges
-                # mapping, _ , shifts_idx = self.compute_nl(cutoff=self.r_max, 
-                #                                                             pos=positions, 
-                #                                                             cell=cell, 
-                #                                                             pbc=self.pbc, 
-                #                                                             batch=self.batch, 
+                # mapping, _ , shifts_idx = compute_neighborlist(cutoff=self.r_max,
+                #                                                             pos=positions,
+                #                                                             cell=cell,
+                #                                                             pbc=self.pbc,
+                #                                                             batch=self.batch,
                 #                                                             self_interaction=False)
-                mapping, shifts_idx = _simple_nl(positions, cell, self.pbc, self.r_max)
-                
+                mapping, shifts_idx = simple_nl(positions, cell, self.periodic, self.r_max)
+
                 edge_index = torch.stack((mapping[0], mapping[1]))
 
                 shifts = torch.mm(shifts_idx, cell)
 
                 # create input dict
-                input_dict = { "ptr" : self.ptr, 
-                              "node_attrs": self.node_attrs, 
-                              "batch": self.batch, 
-                              "pbc": self.pbc,
-                              "cell": cell,
-                              "positions": positions,
-                              "edge_index": edge_index,
-                              "unit_shifts": shifts_idx,
-                              "shifts": shifts}
-                
+                input_dict = {
+                    "ptr": self.ptr,
+                    "node_attrs": self.node_attrs,
+                    "batch": self.batch,
+                    "pbc": self.pbc,
+                    "cell": cell,
+                    "positions": positions,
+                    "edge_index": edge_index,
+                    "unit_shifts": shifts_idx,
+                    "shifts": shifts,
+                }
+
                 # predict
-                out = self.model(input_dict,compute_force=False)
+                out = self.model(
+                    input_dict,
+                    compute_force=False,
+                    particle_filter_indices=self.particle_filter_indices,
+                )
 
                 energy = out["interaction_energy"]
                 if energy is None:
                     energy = torch.tensor(0.0, device=self.device)
-                
-                # return energy 
-                energy = energy*self.energy_to_kJ
+
+                # return energy
+                energy = energy * self.energy_to_kJ
 
                 return energy
-            
 
-        is_periodic = (topology.getPeriodicBoxVectors() is not None) or system.usesPeriodicBoundaryConditions()
-
+        is_periodic = (
+            topology.getPeriodicBoxVectors() is not None
+        ) or system.usesPeriodicBoundaryConditions()
 
         atomic_numbers = [atom.element.atomic_number for atom in includedAtoms]
 
         # torch_dtype = {"float32":torch.float32, "float64":torch.float64}[dtype]
+        maceforce = MACEForce(
+            self.model_path,
+            atomic_numbers,
+            atoms,
+            is_periodic,
+            device,
+            dtype=dtype,
+            particle_filter_indices=None,
+        )
 
-        maceforce = MACEForce(self.model_path, atomic_numbers, atoms, is_periodic, device, dtype=dtype)
-        
         # Convert it to TorchScript and save it.
         module = torch.jit.script(maceforce)
-        _, filename = tempfile.mkstemp(suffix='.pt')
+        # need to write these to the current working directory, such that they're not lost in a scratch directory and the simulation can be resulted
+        os.makedirs(os.path.join(os.getcwd(), "compiled_models"), exist_ok=True)
+        _, filename = tempfile.mkstemp(
+            suffix=".pt", dir=os.path.join(os.getcwd(), "compiled_models")
+        )
         module.save(filename)
 
         # Create the TorchForce and add it to the System.
         force = openmmtorch.TorchForce(filename)
         force.setForceGroup(forceGroup)
         force.setUsesPeriodicBoundaryConditions(is_periodic)
-        #force.setOutputsForces(True)
+        # force.setOutputsForces(True)
         system.addForce(force)
 
-MLPotential.registerImplFactory('mace', MACEPotentialImplFactory())
+
+MLPotential.registerImplFactory("mace", MACEPotentialImplFactory())
