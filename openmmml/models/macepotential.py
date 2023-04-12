@@ -226,7 +226,7 @@ class MACEPotentialImpl(MLPotentialImpl):
                 out = self.model(
                     input_dict,
                     compute_force=False,
-                    particle_filter_indices=self.particle_filter_indices,
+                    # particle_filter_indices=self.particle_filter_indices,
                 )
 
                 energy = out["interaction_energy"]

@@ -43,7 +43,7 @@ class MLPotentialImplFactory(object):
     of MLPotentialImpl and MLPotentialImplFactory, and register an instance of
     the factory by calling MLPotential.registerImplFactory().
     """
-    
+
     def createImpl(self, name: str, **args) -> "MLPotentialImpl":
         """Create a MLPotentialImpl that will be used to implement a MLPotential.
 
@@ -64,7 +64,7 @@ class MLPotentialImplFactory(object):
         -------
         a MLPotentialImpl that implements the potential
         """
-        raise NotImplementedError('Subclasses must implement createImpl()')
+        raise NotImplementedError("Subclasses must implement createImpl()")
 
 
 class MLPotentialImpl(object):
@@ -76,13 +76,15 @@ class MLPotentialImpl(object):
     factory that has been registered for that name and uses it to create a
     MLPotentialImpl of the appropriate subclass.
     """
-    
-    def addForces(self,
-                  topology: openmm.app.Topology,
-                  system: openmm.System,
-                  atoms: Optional[Iterable[int]],
-                  forceGroup: int,
-                  **args):
+
+    def addForces(
+        self,
+        topology: openmm.app.Topology,
+        system: openmm.System,
+        atoms: Optional[Iterable[int]],
+        forceGroup: int,
+        **args,
+    ):
         """Add Force objects to a System to implement the potential function.
 
         This is invoked by MLPotential.createSystem().  Subclasses must implement
@@ -104,7 +106,7 @@ class MLPotentialImpl(object):
             are passed to this method.  This allows subclasses to customize their
             behavior based on extra arguments.
         """
-        raise NotImplementedError('Subclasses must implement addForces()')
+        raise NotImplementedError("Subclasses must implement addForces()")
 
 
 class MLPotential(object):
@@ -134,7 +136,7 @@ class MLPotential(object):
     """
 
     _implFactories: Dict[str, MLPotentialImplFactory] = {}
-    
+
     def __init__(self, name: str, **args):
         """Create a MLPotential.
 
@@ -150,7 +152,7 @@ class MLPotential(object):
             potential functions for more information.
         """
         self._impl = MLPotential._implFactories[name].createImpl(name, **args)
-    
+
     def createSystem(self, topology: openmm.app.Topology, **args) -> openmm.System:
         """Create a System for running a simulation with this potential function.
 
@@ -178,14 +180,17 @@ class MLPotential(object):
         self._impl.addForces(topology, system, None, 0, **args)
         return system
 
-    def createMixedSystem(self,
-                          topology: openmm.app.Topology,
-                          system: openmm.System,
-                          atoms: Iterable[int],
-                          removeConstraints: bool = True,
-                          forceGroup: int = 0,
-                          interpolate: bool = False,
-                          **args) -> openmm.System:
+    def createMixedSystem(
+        self,
+        topology: openmm.app.Topology,
+        system: openmm.System,
+        atoms: Iterable[int],
+        removeConstraints: bool = True,
+        forceGroup: int = 0,
+        interpolate: bool = False,
+        #   optionally: device, dtype, extra_particle_indices
+        **args,
+    ) -> openmm.System:
         """Create a System that is partly modeled with this potential and partly
         with a conventional force field.
 
@@ -243,6 +248,117 @@ class MLPotential(object):
         a newly created System object that uses this potential function to model the Topology
         """
         # Create the new System, removing bonded interactions within the ML subset.
+        # Add a `beta_scale` parameter for the REST implementation
+        # kB = unit.BOLTZMANN_CONSTANT_kB * unit.AVOGADRO_CONSTANT_NA
+        # kT_high = kB * args.get('T_high', 300.*unit.kelvin)
+        # kT_low = kB * args.get('T_low', 300.*unit.kelvin)
+        # beta_scale = kT_low / kT_high
+        # print(f"beta_scale: {beta_scale}; T_high: {args.get('T_high', 300.)}; T_low: {args.get('T_low', 300.)}")
+
+        # # Create the new System, removing bonded interactions within the ML subset.
+
+        # newSystem = self._removeBonds(system, atoms, True, removeConstraints)
+
+        # # Add nonbonded exceptions and exclusions
+        # # Also, add particle parameter offsets.
+
+        # atomList = list(atoms)
+        # for force in newSystem.getForces():
+        #     if isinstance(force, openmm.NonbondedForce):
+        #         force.addGlobalParameter('lambda_interRest', beta_scale)
+        #         # setting a beta_scale that is not `1` will trigger a new protocol fn decoration in ommtools.
+        #         for i in range(len(atomList)):
+        #             # Here, add the particle offsets for particles in `atomList`
+        #             c, s, e = force.getParticleParameters(i)
+        #             _ = force.addParticleParameterOffset('lambda_interRest', i, 0., 0., e)
+
+        #             for j in range(i):
+        #                 force.addException(i, j, 0, 1, 0, True)
+        #     elif isinstance(force, openmm.CustomNonbondedForce):
+        #         existing = set(tuple(force.getExclusionParticles(i)) for i in range(force.getNumExclusions()))
+        #         for i in range(len(atomList)):
+        #             for j in range(i):
+        #                 if (i, j) not in existing and (j, i) not in existing:
+        #                     force.addExclusion(i, j, True)
+
+        # # Add the ML potential.
+
+        # if not interpolate:
+        #     self._impl.addForces(topology, newSystem, atomList, forceGroup, **args)
+        # else:
+        #     # Create a CustomCVForce and put the ML forces inside it.
+        #     cv = openmm.CustomCVForce('')
+        #     cv.addGlobalParameter('lambda_interpolate', 1)
+        #     tempSystem = openmm.System()
+        #     self._impl.addForces(topology, tempSystem, atomList, forceGroup, **args)
+        #     mlVarNames = []
+        #     for i, force in enumerate(tempSystem.getForces()):
+        #         name = f'mlForce{i+1}'
+        #         cv.addCollectiveVariable(name, deepcopy(force))
+        #         mlVarNames.append(name)
+
+        #     # Create Forces for all the bonded interactions within the ML subset and add them to the CustomCVForce.
+
+        #     bondedSystem = self._removeBonds(system, atoms, False, removeConstraints)
+        #     bondedForces = []
+        #     for force in bondedSystem.getForces():
+        #         if hasattr(force, 'addBond') or hasattr(force, 'addAngle') or hasattr(force, 'addTorsion'):
+        #             bondedForces.append(force)
+        #     mmVarNames = []
+        #     for i, force in enumerate(bondedForces):
+        #         name = f'mmForce{i+1}'
+        #         cv.addCollectiveVariable(name, deepcopy(force))
+        #         mmVarNames.append(name)
+
+        #     # Create a CustomBondForce that computes all nonbonded interactions within the ML subset.
+
+        #     for force in system.getForces():
+        #         if isinstance(force, openmm.NonbondedForce):
+        #             internalNonbonded = openmm.CustomBondForce('138.935456*chargeProd/r + 4*epsilon*((sigma/r)^12-(sigma/r)^6)')
+        #             internalNonbonded.addPerBondParameter('chargeProd')
+        #             internalNonbonded.addPerBondParameter('sigma')
+        #             internalNonbonded.addPerBondParameter('epsilon')
+        #             numParticles = system.getNumParticles()
+        #             atomCharge = [0]*numParticles
+        #             atomSigma = [0]*numParticles
+        #             atomEpsilon = [0]*numParticles
+        #             for i in range(numParticles):
+        #                 charge, sigma, epsilon = force.getParticleParameters(i)
+        #                 atomCharge[i] = charge
+        #                 atomSigma[i] = sigma
+        #                 atomEpsilon[i] = epsilon
+        #             exceptions = {}
+        #             for i in range(force.getNumExceptions()):
+        #                 p1, p2, chargeProd, sigma, epsilon = force.getExceptionParameters(i)
+        #                 exceptions[(p1, p2)] = (chargeProd, sigma, epsilon)
+        #             for p1 in atomList:
+        #                 for p2 in atomList:
+        #                     if p1 == p2:
+        #                         break
+        #                     if (p1, p2) in exceptions:
+        #                         chargeProd, sigma, epsilon = exceptions[(p1, p2)]
+        #                     elif (p2, p1) in exceptions:
+        #                         chargeProd, sigma, epsilon = exceptions[(p2, p1)]
+        #                     else:
+        #                         chargeProd = atomCharge[p1]*atomCharge[p2]
+        #                         sigma = 0.5*(atomSigma[p1]+atomSigma[p2])
+        #                         epsilon = unit.sqrt(atomEpsilon[p1]*atomEpsilon[p2])
+        #                     if chargeProd._value != 0 or epsilon._value != 0:
+        #                         internalNonbonded.addBond(p1, p2, [chargeProd, sigma, epsilon])
+        #             if internalNonbonded.getNumBonds() > 0:
+        #                 name = f'mmForce{len(mmVarNames)+1}'
+        #                 cv.addCollectiveVariable(name, internalNonbonded)
+        #                 mmVarNames.append(name)
+
+        #     # Configure the CustomCVForce so lambda_interpolate interpolates between the conventional and ML potentials.
+
+        #     mlSum = '+'.join(mlVarNames) if len(mlVarNames) > 0 else '0'
+        #     mmSum = '+'.join(mmVarNames) if len(mmVarNames) > 0 else '0'
+
+        #     # make scaling term for REST
+        #     scale_term = f"select(step(lambda_interpolate - 0.5), 2*lambda_interpolate*(1 - sqrt({beta_scale})) - 1 + 2*sqrt({beta_scale}), 1 - 2*lambda_interpolate*(1 - sqrt({beta_scale})))^2"
+        #     cv.setEnergyFunction(f'{scale_term} * (lambda_interpolate*({mlSum}) + (1-lambda_interpolate)*({mmSum}))')
+        #     newSystem.addForce(cv)
 
         newSystem = self._removeBonds(system, atoms, True, removeConstraints)
 
@@ -255,7 +371,10 @@ class MLPotential(object):
                     for j in range(i):
                         force.addException(i, j, 0, 1, 0, True)
             elif isinstance(force, openmm.CustomNonbondedForce):
-                existing = set(tuple(force.getExclusionParticles(i)) for i in range(force.getNumExclusions()))
+                existing = set(
+                    tuple(force.getExclusionParticles(i))
+                    for i in range(force.getNumExclusions())
+                )
                 for i in range(len(atomList)):
                     for j in range(i):
                         if (i, j) not in existing and (j, i) not in existing:
@@ -264,17 +383,19 @@ class MLPotential(object):
         # Add the ML potential.
 
         if not interpolate:
+            # assume a mace impl, TODO, this will break for ANI usage
+            # for mace, add the optional extra atoms to the atomList
             self._impl.addForces(topology, newSystem, atomList, forceGroup, **args)
         else:
             # Create a CustomCVForce and put the ML forces inside it.
 
-            cv = openmm.CustomCVForce('')
-            cv.addGlobalParameter('lambda_interpolate', 1)
+            cv = openmm.CustomCVForce("")
+            cv.addGlobalParameter("lambda_interpolate", 1)
             tempSystem = openmm.System()
             self._impl.addForces(topology, tempSystem, atomList, forceGroup, **args)
             mlVarNames = []
             for i, force in enumerate(tempSystem.getForces()):
-                name = f'mlForce{i+1}'
+                name = f"mlForce{i+1}"
                 cv.addCollectiveVariable(name, deepcopy(force))
                 mlVarNames.append(name)
 
@@ -283,11 +404,15 @@ class MLPotential(object):
             bondedSystem = self._removeBonds(system, atoms, False, removeConstraints)
             bondedForces = []
             for force in bondedSystem.getForces():
-                if hasattr(force, 'addBond') or hasattr(force, 'addAngle') or hasattr(force, 'addTorsion'):
+                if (
+                    hasattr(force, "addBond")
+                    or hasattr(force, "addAngle")
+                    or hasattr(force, "addTorsion")
+                ):
                     bondedForces.append(force)
             mmVarNames = []
             for i, force in enumerate(bondedForces):
-                name = f'mmForce{i+1}'
+                name = f"mmForce{i+1}"
                 cv.addCollectiveVariable(name, deepcopy(force))
                 mmVarNames.append(name)
 
@@ -295,14 +420,16 @@ class MLPotential(object):
 
             for force in system.getForces():
                 if isinstance(force, openmm.NonbondedForce):
-                    internalNonbonded = openmm.CustomBondForce('138.935456*chargeProd/r + 4*epsilon*((sigma/r)^12-(sigma/r)^6)')
-                    internalNonbonded.addPerBondParameter('chargeProd')
-                    internalNonbonded.addPerBondParameter('sigma')
-                    internalNonbonded.addPerBondParameter('epsilon')
+                    internalNonbonded = openmm.CustomBondForce(
+                        "138.935456*chargeProd/r + 4*epsilon*((sigma/r)^12-(sigma/r)^6)"
+                    )
+                    internalNonbonded.addPerBondParameter("chargeProd")
+                    internalNonbonded.addPerBondParameter("sigma")
+                    internalNonbonded.addPerBondParameter("epsilon")
                     numParticles = system.getNumParticles()
-                    atomCharge = [0]*numParticles
-                    atomSigma = [0]*numParticles
-                    atomEpsilon = [0]*numParticles
+                    atomCharge = [0] * numParticles
+                    atomSigma = [0] * numParticles
+                    atomEpsilon = [0] * numParticles
                     for i in range(numParticles):
                         charge, sigma, epsilon = force.getParticleParameters(i)
                         atomCharge[i] = charge
@@ -310,7 +437,13 @@ class MLPotential(object):
                         atomEpsilon[i] = epsilon
                     exceptions = {}
                     for i in range(force.getNumExceptions()):
-                        p1, p2, chargeProd, sigma, epsilon = force.getExceptionParameters(i)
+                        (
+                            p1,
+                            p2,
+                            chargeProd,
+                            sigma,
+                            epsilon,
+                        ) = force.getExceptionParameters(i)
                         exceptions[(p1, p2)] = (chargeProd, sigma, epsilon)
                     for p1 in atomList:
                         for p2 in atomList:
@@ -321,25 +454,35 @@ class MLPotential(object):
                             elif (p2, p1) in exceptions:
                                 chargeProd, sigma, epsilon = exceptions[(p2, p1)]
                             else:
-                                chargeProd = atomCharge[p1]*atomCharge[p2]
-                                sigma = 0.5*(atomSigma[p1]+atomSigma[p2])
-                                epsilon = unit.sqrt(atomEpsilon[p1]*atomEpsilon[p2])
+                                chargeProd = atomCharge[p1] * atomCharge[p2]
+                                sigma = 0.5 * (atomSigma[p1] + atomSigma[p2])
+                                epsilon = unit.sqrt(atomEpsilon[p1] * atomEpsilon[p2])
                             if chargeProd._value != 0 or epsilon._value != 0:
-                                internalNonbonded.addBond(p1, p2, [chargeProd, sigma, epsilon])
+                                internalNonbonded.addBond(
+                                    p1, p2, [chargeProd, sigma, epsilon]
+                                )
                     if internalNonbonded.getNumBonds() > 0:
-                        name = f'mmForce{len(mmVarNames)+1}'
+                        name = f"mmForce{len(mmVarNames)+1}"
                         cv.addCollectiveVariable(name, internalNonbonded)
                         mmVarNames.append(name)
 
             # Configure the CustomCVForce so lambda_interpolate interpolates between the conventional and ML potentials.
 
-            mlSum = '+'.join(mlVarNames) if len(mlVarNames) > 0 else '0'
-            mmSum = '+'.join(mmVarNames) if len(mmVarNames) > 0 else '0'
-            cv.setEnergyFunction(f'lambda_interpolate*({mlSum}) + (1-lambda_interpolate)*({mmSum})')
+            mlSum = "+".join(mlVarNames) if len(mlVarNames) > 0 else "0"
+            mmSum = "+".join(mmVarNames) if len(mmVarNames) > 0 else "0"
+            cv.setEnergyFunction(
+                f"lambda_interpolate*({mlSum}) + (1-lambda_interpolate)*({mmSum})"
+            )
             newSystem.addForce(cv)
         return newSystem
 
-    def _removeBonds(self, system: openmm.System, atoms: Iterable[int], removeInSet: bool, removeConstraints: bool) -> openmm.System:
+    def _removeBonds(
+        self,
+        system: openmm.System,
+        atoms: Iterable[int],
+        removeInSet: bool,
+        removeConstraints: bool,
+    ) -> openmm.System:
         """Copy a System, removing all bonded interactions between atoms in (or not in) a particular set.
 
         Parameters
@@ -363,6 +506,7 @@ class MLPotential(object):
         # Create an XML representation of the System.
 
         import xml.etree.ElementTree as ET
+
         xml = openmm.XmlSerializer.serialize(system)
         root = ET.fromstring(xml)
 
@@ -373,34 +517,36 @@ class MLPotential(object):
 
         # Remove bonds, angles, and torsions.
 
-        for bonds in root.findall('./Forces/Force/Bonds'):
-            for bond in bonds.findall('Bond'):
-                bondAtoms = [int(bond.attrib[p]) for p in ('p1', 'p2')]
+        for bonds in root.findall("./Forces/Force/Bonds"):
+            for bond in bonds.findall("Bond"):
+                bondAtoms = [int(bond.attrib[p]) for p in ("p1", "p2")]
                 if shouldRemove(bondAtoms):
                     bonds.remove(bond)
-        for angles in root.findall('./Forces/Force/Angles'):
-            for angle in angles.findall('Angle'):
-                angleAtoms = [int(angle.attrib[p]) for p in ('p1', 'p2', 'p3')]
+        for angles in root.findall("./Forces/Force/Angles"):
+            for angle in angles.findall("Angle"):
+                angleAtoms = [int(angle.attrib[p]) for p in ("p1", "p2", "p3")]
                 if shouldRemove(angleAtoms):
                     angles.remove(angle)
-        for torsions in root.findall('./Forces/Force/Torsions'):
-            for torsion in torsions.findall('Torsion'):
-                torsionAtoms = [int(torsion.attrib[p]) for p in ('p1', 'p2', 'p3', 'p4')]
+        for torsions in root.findall("./Forces/Force/Torsions"):
+            for torsion in torsions.findall("Torsion"):
+                torsionAtoms = [
+                    int(torsion.attrib[p]) for p in ("p1", "p2", "p3", "p4")
+                ]
                 if shouldRemove(torsionAtoms):
                     torsions.remove(torsion)
 
         # Optionally remove constraints.
 
         if removeConstraints:
-            for constraints in root.findall('./Constraints'):
-                for constraint in constraints.findall('Constraint'):
-                    constraintAtoms = [int(constraint.attrib[p]) for p in ('p1', 'p2')]
+            for constraints in root.findall("./Constraints"):
+                for constraint in constraints.findall("Constraint"):
+                    constraintAtoms = [int(constraint.attrib[p]) for p in ("p1", "p2")]
                     if shouldRemove(constraintAtoms):
                         constraints.remove(constraint)
 
         # Create a new System from it.
 
-        return openmm.XmlSerializer.deserialize(ET.tostring(root, encoding='unicode'))
+        return openmm.XmlSerializer.deserialize(ET.tostring(root, encoding="unicode"))
 
     @staticmethod
     def registerImplFactory(name: str, factory: MLPotentialImplFactory):
