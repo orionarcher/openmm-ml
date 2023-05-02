@@ -174,8 +174,6 @@ class MACEPotentialImpl(MLPotentialImpl):
                 else:
                     self.pbc = torch.tensor([False, False, False], device=self.device)
 
-                # self.compute_nl = compute_neighborlist
-
                 if indices is None:
                     self.indices = None
                 else:
@@ -198,17 +196,9 @@ class MACEPotentialImpl(MLPotentialImpl):
                 else:
                     cell = torch.eye(3, device=self.device)
 
-                # compute edges
-                # mapping, _ , shifts_idx = compute_neighborlist(cutoff=self.r_max,
-                #                                                             pos=positions,
-                #                                                             cell=cell,
-                #                                                             pbc=self.pbc,
-                #                                                             batch=self.batch,
-                #                                                             self_interaction=False)
                 mapping, shifts_idx = self.nl(
                     positions, cell, self.periodic, self.r_max
                 )
-                # mapping, shifts_idx = simple_nl(positions, cell, self.periodic, self.r_max)
 
                 edge_index = torch.stack((mapping[0], mapping[1]))
 

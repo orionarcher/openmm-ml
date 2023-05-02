@@ -128,7 +128,7 @@ def _nnpops_nl(
             positions,
             cutoff=cutoff,
             max_num_neighbors=max_num_neighbors,
-            box_vectors=cell,
+            box_vectors=cell if pbc else None,
         )
     else:
         neighbors, deltas, distance = getNeighborPairs(
@@ -152,7 +152,7 @@ def _nnpops_nl(
             torch.linalg.inv(cell),
         )
     else:
-        shifts = torch.zeros(deltas.shape[0], device=device)
+        shifts = torch.zeros(deltas.shape, device=device)
 
     # we have i<j, get also i>j
     neighbors = torch.hstack((neighbors, torch.stack((neighbors[1], neighbors[0]))))
