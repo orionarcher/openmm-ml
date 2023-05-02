@@ -31,15 +31,12 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 from openmmml.mlpotential import MLPotential, MLPotentialImpl, MLPotentialImplFactory
 import openmm
-from typing import Iterable, Optional, Union, Tuple, List
-from torch_nl import compute_neighborlist, compute_neighborlist_n2
-import torch
+from typing import Iterable, Optional
 
 from ase.units import kJ, mol, nm
 import tempfile
 import os
-from openmmml.models.utils import simple_nl
-
+from openmmml.models.utils import simple_nl, _nnpops_nl
 
 
 class MACEPotentialImplFactory(MLPotentialImplFactory):
@@ -73,9 +70,9 @@ class MACEPotentialImpl(MLPotentialImpl):
         atoms: Optional[Iterable[int]],
         forceGroup: int,
         # implementation : str = None,
+        nl: str = "nnpops",
         device: str = None,
         dtype: str = "float64",
-        extra_particle_indices: Optional[torch.Tensor] = None,
         **args
     ):
 
@@ -95,8 +92,6 @@ class MACEPotentialImpl(MLPotentialImpl):
         if atoms is not None:
             # check if atoms needs to be ordered
             includedAtoms = [includedAtoms[i] for i in atoms]
-            if extra_particle_indices is not None:
-                includedAtoms.extend([list(topology.atoms())[i] for i in extra_particle_indices])
 
         class MACEForce(torch.nn.Module):
             def __init__(
@@ -106,8 +101,8 @@ class MACEPotentialImpl(MLPotentialImpl):
                 indices,
                 periodic,
                 device,
+                nl = "nnpops",
                 dtype=torch.float64,
-                particle_filter_indices=None,
             ):
                 super(MACEForce, self).__init__()
                 if device is None:
@@ -120,6 +115,12 @@ class MACEPotentialImpl(MLPotentialImpl):
                 else:  # unless user has specified the device
                     self.device = torch.device(device)
 
+                # specify the neighbour list
+                if nl == "torch":
+                    self.nl = simple_nl
+                elif nl == "nnpops":
+                    self.nl = _nnpops_nl
+
                 self.default_dtype = dtype
                 torch.set_default_dtype(self.default_dtype)
 
@@ -128,6 +129,8 @@ class MACEPotentialImpl(MLPotentialImpl):
                     self.device,
                     " with dtype: ",
                     self.default_dtype,
+                    "and neigbbour list: ",
+                    nl,
                 )
                 self.periodic = periodic
                 # conversion constants
@@ -135,7 +138,6 @@ class MACEPotentialImpl(MLPotentialImpl):
                 self.distance_to_nm = 0.1  # A->nm
                 self.energy_to_kJ = mol / kJ  # eV->kJ
 
-                self.particle_filter_indices = particle_filter_indices
 
                 self.model = torch.load(model_path, map_location=device)
                 self.model.to(self.default_dtype)
@@ -203,7 +205,10 @@ class MACEPotentialImpl(MLPotentialImpl):
                 #                                                             pbc=self.pbc,
                 #                                                             batch=self.batch,
                 #                                                             self_interaction=False)
-                mapping, shifts_idx = simple_nl(positions, cell, self.periodic, self.r_max)
+                mapping, shifts_idx = self.nl(
+                    positions, cell, self.periodic, self.r_max
+                )
+                # mapping, shifts_idx = simple_nl(positions, cell, self.periodic, self.r_max)
 
                 edge_index = torch.stack((mapping[0], mapping[1]))
 
@@ -251,13 +256,15 @@ class MACEPotentialImpl(MLPotentialImpl):
             atoms,
             is_periodic,
             device,
+            nl=nl,
             dtype=dtype,
-            particle_filter_indices=None,
         )
 
         # Convert it to TorchScript and save it.
         module = torch.jit.script(maceforce)
-        # need to write these to the current working directory, such that they're not lost in a scratch directory and the simulation can be resulted
+        # need to write these to the current working directory,
+        #  such that they're not lost in a scratch directory
+        #  and the simulation can be resulted
         os.makedirs(os.path.join(os.getcwd(), "compiled_models"), exist_ok=True)
         _, filename = tempfile.mkstemp(
             suffix=".pt", dir=os.path.join(os.getcwd(), "compiled_models")
