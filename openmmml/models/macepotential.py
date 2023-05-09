@@ -120,6 +120,8 @@ class MACEPotentialImpl(MLPotentialImpl):
                     self.nl = simple_nl
                 elif nl == "nnpops":
                     self.nl = _nnpops_nl
+                else:
+                    raise ValueError(f"Neighbour list {nl} not recognised")
 
                 self.default_dtype = dtype
                 torch.set_default_dtype(self.default_dtype)

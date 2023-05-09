@@ -100,7 +100,6 @@ def simple_nl(
 
     return neighbors, shifts
 
-
 def _nnpops_nl(
     positions: torch.Tensor,
     cell: torch.Tensor,
@@ -124,15 +123,15 @@ def _nnpops_nl(
     """
     device = positions.device
     if pbc:
-        neighbors, deltas, distance = getNeighborPairs(
+        neighbors, deltas, distance, n_found_pairs = getNeighborPairs(
             positions,
             cutoff=cutoff,
-            max_num_neighbors=max_num_neighbors,
+            max_num_pairs=max_num_neighbors,
             box_vectors=cell if pbc else None,
         )
     else:
-        neighbors, deltas, distance = getNeighborPairs(
-            positions, cutoff=cutoff, max_num_neighbors=max_num_neighbors
+        neighbors, deltas, distance, n_found_pairs = getNeighborPairs(
+            positions, cutoff=cutoff, max_num_pairs=max_num_neighbors
         )
 
     neighbors = neighbors.to(dtype=torch.long)
