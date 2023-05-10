@@ -36,7 +36,7 @@ from typing import Iterable, Optional
 from ase.units import kJ, mol, nm
 import tempfile
 import os
-from openmmml.models.utils import simple_nl, _nnpops_nl
+from openmmml.models.utils import simple_nl, nnpops_nl
 
 
 class MACEPotentialImplFactory(MLPotentialImplFactory):
@@ -119,7 +119,7 @@ class MACEPotentialImpl(MLPotentialImpl):
                 if nl == "torch":
                     self.nl = simple_nl
                 elif nl == "nnpops":
-                    self.nl = _nnpops_nl
+                    self.nl = nnpops_nl
                 else:
                     raise ValueError(f"Neighbour list {nl} not recognised")
 
@@ -132,7 +132,7 @@ class MACEPotentialImpl(MLPotentialImpl):
                     " with dtype: ",
                     self.default_dtype,
                     "and neigbbour list: ",
-                    nl,
+                    self.nl,
                 )
                 self.periodic = periodic
                 # conversion constants
