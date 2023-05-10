@@ -132,7 +132,7 @@ class MACEPotentialImpl(MLPotentialImpl):
                     " with dtype: ",
                     self.default_dtype,
                     "and neigbbour list: ",
-                    self.nl,
+                    nl,
                 )
                 self.periodic = periodic
                 # conversion constants
