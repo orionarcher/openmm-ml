@@ -123,14 +123,14 @@ def _nnpops_nl(
     """
     device = positions.device
     if pbc:
-        neighbors, deltas, distance, n_found_pairs = getNeighborPairs(
+        neighbors, deltas, distance = getNeighborPairs(
             positions,
             cutoff=cutoff,
             max_num_pairs=max_num_neighbors,
             box_vectors=cell if pbc else None,
         )
     else:
-        neighbors, deltas, distance, n_found_pairs = getNeighborPairs(
+        neighbors, deltas, distance = getNeighborPairs(
             positions, cutoff=cutoff, max_num_pairs=max_num_neighbors
         )
 
