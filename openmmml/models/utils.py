@@ -122,17 +122,17 @@ def nnpops_nl(
 
     """
     device = positions.device
-    if pbc:
-        neighbors, deltas, distance = getNeighborPairs(
-            positions,
-            cutoff=cutoff,
-            max_num_neighbors=max_num_neighbors,
-            box_vectors=cell if pbc else None,
-        )
-    else:
-        neighbors, deltas, distance = getNeighborPairs(
-            positions, cutoff=cutoff, max_num_neighbors=max_num_neighbors
-        )
+    # if pbc:
+    neighbors, deltas, distance, n_pairs_found = getNeighborPairs(
+        positions,
+        cutoff=cutoff,
+        max_num_pairs=max_num_neighbors,
+        box_vectors=cell if pbc else None,
+    )
+    # else:
+    #     neighbors, deltas, distance, n_pairs_found = getNeighborPairs(
+    #         positions, cutoff=cutoff, max_num_pairs=max_num_neighbors
+    #     )
 
     neighbors = neighbors.to(dtype=torch.long)
 
