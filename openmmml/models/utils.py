@@ -126,8 +126,9 @@ def nnpops_nl(
     neighbors, deltas, distance, n_pairs_found = getNeighborPairs(
         positions,
         cutoff=cutoff,
-        max_num_pairs=max_num_neighbors,
+        max_num_pairs=-1,
         box_vectors=cell if pbc else None,
+        check_errors=False
     )
     # else:
     #     neighbors, deltas, distance, n_pairs_found = getNeighborPairs(
