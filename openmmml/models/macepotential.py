@@ -153,6 +153,7 @@ class MACEPotentialImpl(MLPotentialImpl):
                 self.z_table = utils.AtomicNumberTable(
                     [int(z) for z in self.model.atomic_numbers]
                 )
+                self.model.atomic_numbers = torch.tensor(self.model.atomic_numbers)
 
                 self.model = jit.compile(self.model)
 
@@ -241,7 +242,7 @@ class MACEPotentialImpl(MLPotentialImpl):
 
         atomic_numbers = [atom.element.atomic_number for atom in includedAtoms]
 
-        # torch_dtype = {"float32":torch.float32, "float64":torch.float64}[dtype]
+        torch_dtype = {"float32":torch.float32, "float64":torch.float64}[dtype]
         maceforce = MACEForce(
             self.model_path,
             atomic_numbers,
@@ -249,7 +250,7 @@ class MACEPotentialImpl(MLPotentialImpl):
             is_periodic,
             device,
             nl=nl,
-            dtype=dtype,
+            dtype=torch_dtype,
         )
 
         # Convert it to TorchScript and save it.
